@@ -4,9 +4,9 @@ Data: 2026-11-06. Questo documento riassume il lavoro fatto per avviare U-Boot e
 kernel Linux **mainline** sulla BeaglePlay. Racconta le decisioni prese, i problemi
 incontrati con la toolchain LLVM e lo stato attuale.
 
-**In breve**: U-Boot vanilla 2026.10 si avvia dalla microSD e porta la Debian della SD fino
-al login (provato sulla scheda il 2026-11-06). Il kernel mainline è compilato ma non
-ancora provato.
+**In breve**: U-Boot vanilla 2026.10 e il kernel mainline `7.4.0-rc1` si avviano dalla
+microSD e portano la Debian della SD fino al login. Sulla scheda `uname -r` restituisce
+`7.4.0-rc1-gf66469d9905b`. Provato il 2026-11-06.
 La procedura passo passo è in [1-boot-vanilla.md](1-boot-vanilla.md); lo script di build è
 [build.sh](build.sh).
 
@@ -193,6 +193,35 @@ Scanning bootdev 'mmc@fa10000.bootdev':      <- ripiega sull'eMMC
   (`0x9e800000` + 24 MiB). `./build.sh collect` genera il file in `out/boot/`. Il kernel
   vanilla non ne ha bisogno, perché si usa `Image` non compresso.
 
+### 7. Kernel vanilla bloccato su `Waiting for root device /dev/mmcblk1p3...`
+
+Prima prova del kernel vanilla (2026-11-06). U-Boot avvia la voce `vanilla` e il kernel
+parte (`Linux version 7.4.0-rc1-gf66469d9905b ... clang version 23.1.4, LLD 23.1.4`), ma
+non monta il rootfs:
+
+```
+[    1.488958] Warning: unable to open an initial console.
+[    1.494400] Waiting for root device /dev/mmcblk1p3...
+[   11.742069] omap8250 2800000.serial: probe with driver omap8250 failed with error -110
+[   12.039465] platform fa00000.mmc: deferred probe pending: platform: wait for supplier
+               /bus@f0000/system-controller@44043000/clock-controller
+```
+
+- **Causa**: nel `defconfig` arm64 mainline il protocollo TI SCI e i driver che ne
+  dipendono sono moduli: `TI_SCI_PROTOCOL`, `TI_SCI_CLK`, `TI_SCI_PM_DOMAINS`,
+  `TI_SCI_INTR_IRQCHIP`, `TI_SCI_INTA_IRQCHIP` e `RESET_TI_SCI` sono tutti `=m`
+  (`arch/arm64/configs/defconfig`). Sui SoC K3 clock e power domain dei periferici li
+  gestisce il firmware TIFS, tramite TI SCI (`system-controller@44043000`). Senza questi
+  driver il controller SD (`fa00000.mmc`), l'UART, le GPIO e l'I2C restano in deferred
+  probe. Ne nasce un circolo vizioso: i moduli stanno sul rootfs, e il rootfs sta sulla SD
+  che non si attiva. Il driver SD `sdhci-am654` è `=y`, ma da solo non basta.
+- **Soluzione**: compilare quei sei driver nel kernel (`=y`). In `build.sh`, dopo
+  `defconfig`, si eseguono `scripts/config --enable ...` e `olddefconfig`. Il sorgente
+  resta vanilla; cambia solo la configurazione. In alternativa servirebbe un initramfs con
+  i moduli, come fanno le distribuzioni.
+- **Verifica**: nella prova 2 il controller SD parte subito e il rootfs viene montato
+  1,8 s dopo l'avvio del kernel (vedi "Prove del kernel vanilla").
+
 ## Stato attuale (2026-11-06)
 
 ### Build
@@ -206,7 +235,7 @@ Tutti gli artefatti sono compilati e raccolti in `out/boot/` con `./build.sh col
 | `tiboot3.bin` (U-Boot SPL R5, `tiboot3-am62x-gp-evm.bin`) | 311 729 B | clang 23.1.4 + ld GNU (`arm-none-eabi-`) |
 | `tispl.bin` (BL31 + OP-TEE + DM + SPL A53) | 1 056 807 B | SPL A53: gcc 16.2 (problema 5); BL31 e OP-TEE: clang |
 | `u-boot.img` (U-Boot A53) | 1 203 552 B | gcc 16.2 (`aarch64-linux-gnu-`) |
-| `Image-vanilla` (Linux `7.4.0-rc1`, commit `f66469d99`, `defconfig`) | 42 252 800 B | clang 23.1.4 + LLD 23.1.4 |
+| `Image-vanilla` (Linux `7.4.0-rc1`, commit `f66469d99`, `defconfig` + TI SCI `=y`) | 42 256 896 B | clang 23.1.4 + LLD 23.1.4 |
 | `k3-am625-beagleplay-vanilla.dtb` | 63 745 B | dtc (dal sorgente kernel) |
 
 In più `out/boot/uEnv.txt` (342 byte), generato da `collect` (problema 6).
@@ -263,6 +292,65 @@ Cosa dimostra il log:
 - **`mmc@fa00000.bootdev`**: extlinux è stato letto dalla SD, non dall'eMMC (`mmc@fa10000`).
 - Gli avvisi del kernel (`bpf-restrict-fs`, `bq32k`, `remoteproc0`) sono gli stessi già
   visti con l'U-Boot BeagleBoard e non dipendono da U-Boot.
+
+### Prove del kernel vanilla sulla scheda (2026-11-06)
+
+Procedura: guida §5, tutto dal PC con la SD estratta. In `extlinux.conf` c'è la voce
+`vanilla` con `default vanilla`; la voce Debian resta come riserva.
+
+| Prova | Kernel | Esito |
+|-------|--------|-------|
+| 1 | `defconfig` puro | il kernel parte, poi resta su `Waiting for root device /dev/mmcblk1p3` (problema 7) |
+| 2 | `defconfig` + TI SCI `=y` | **riuscita**: rootfs montato, systemd, login; `uname -r` = `7.4.0-rc1-gf66469d9905b` |
+
+Log della prova 2 (abbreviato; la parte U-Boot è identica alla prova 3 di U-Boot):
+
+```
+U-Boot 2026.10-00667-g0a55b098d6f5 (Nov 06 2026 - 14:57:02 +0100)
+Loaded env from uEnv.txt
+** Booting bootflow 'mmc@fa00000.bootdev.part_1' with extlinux
+Enter choice: 6:	vanilla
+Retrieving file: /Image-vanilla
+append: console=ttyS2,115200n8 earlycon root=/dev/mmcblk1p3 rw rootfstype=ext4 rootwait
+Retrieving file: /k3-am625-beagleplay-vanilla.dtb
+Starting kernel ...
+[    0.000000] Linux version 7.4.0-rc1-gf66469d9905b (nik@workstation) (clang version 23.1.4, LLD 23.1.4) #2 SMP PREEMPT_DYNAMIC Fri Nov  6 16:20:30 CET 2026
+[    0.000000] Machine model: BeagleBoard.org BeaglePlay
+[    1.805352] mmc1: SDHCI controller on fa00000.mmc [fa00000.mmc] using ADMA 64-bit
+[    1.805741] Waiting for root device /dev/mmcblk1p3...
+[    2.050557] mmcblk1: mmc1:aaaa SC32G 29.7 GiB
+[    2.103185] EXT4-fs (mmcblk1p3): mounted filesystem b4824503-... r/w with ordered data mode.
+[    2.165282] Run /sbin/init as init process
+Welcome to Debian GNU/Linux 13 (trixie)!
+beagleplay login: nik
+nik@beagleplay:~$ uname -r
+7.4.0-rc1-gf66469d9905b
+```
+
+Cosa dimostra il log:
+- **`Enter choice: 6:	vanilla`** senza input: U-Boot ha scelto da solo la voce di
+  default.
+- **`Linux version 7.4.0-rc1-gf66469d9905b ... clang version 23.1.4, LLD 23.1.4`**: kernel
+  mainline (commit `f66469d99`), compilato e linkato con LLVM. `#2` è la seconda build,
+  quella con TI SCI built-in.
+- **`EXT4-fs (mmcblk1p3): mounted`** e **`uname -r`**: il rootfs della SD è montato e il
+  sistema in esecuzione usa il kernel vanilla. Requisito della tesi raggiunto: U-Boot e
+  Linux vanilla.
+
+Avvisi visti nel log, che non impediscono il login:
+- `zram-generator: modprobe "zram" failed` e, dopo circa 90 s,
+  `Timed out waiting for device dev-zram0.device`: la Debian si aspetta lo swap compresso
+  zram, ma nel `defconfig` `CONFIG_ZRAM` non è impostato. Rallenta il boot di circa 90 s.
+  Si può risolvere abilitando `ZRAM` (anche come modulo) o disattivando zram nella Debian.
+- `Failed to start iwd.service` e `Failed to start docker.service`: servizi della Debian
+  IoT che chiedono funzioni del kernel assenti nel `defconfig`. La causa precisa non è
+  stata indagata. Nella config mancano per esempio `CRYPTO_USER_API_SKCIPHER` e
+  `KEY_DH_OPERATIONS`, che `iwd` usa. Non servono per la tesi.
+- `cfg80211: failed to load regulatory.db`: manca il database delle regolazioni Wi-Fi nel
+  rootfs. Il driver Wi-Fi `wlcore` comunque si carica (`firmware booted`).
+- `bq32k 0-0068: Oscillator Failure. Check RTC battery.`: l'RTC non ha batteria. L'ora
+  viene ripresa da `/var/lib/systemd/timesync/clock` (resta 2026-09-20 senza rete).
+- `bpf-restrict-fs: BPF LSM hook not enabled in the kernel`: come con il kernel Debian.
 
 ### Base Debian su microSD
 
@@ -337,23 +425,26 @@ l'U-Boot dell'eMMC scansiona la SD e mostra le voci "microSD".
 ## Prossimi passi
 
 1. ~~**U-Boot vanilla.**~~ Fatto il 2026-11-06 (prova 3).
-2. **Kernel vanilla** (guida §5).
-   - Copiare `Image-vanilla` e il dtb in `/boot/firmware`.
-   - Installare i moduli in `/lib/modules` del rootfs.
-   - Aggiungere in `extlinux.conf` una voce con `root=/dev/mmcblk1p3`.
-   - Verifica attesa: `uname -r` riporta `7.4.0-rc1-gf66469d9905b`.
-3. Opzionale: rootfs minimale con Buildroot.
+2. ~~**Kernel vanilla.**~~ Fatto il 2026-11-06 (prova 2): `uname -r` =
+   `7.4.0-rc1-gf66469d9905b`.
+3. Opzionale: abilitare `ZRAM` nel kernel per eliminare l'attesa di 90 s al boot.
+4. Opzionale: capire perché U-Boot A53 compilato con clang si blocca (problema 5).
+5. Opzionale: rootfs minimale con Buildroot.
+6. Fase successiva della tesi: applicazioni bare-metal (vedi README).
 
 ## Rischi aperti
 
 - **U-Boot su K3 compilato con clang** non è documentato upstream. È già successo con la
   parte A53 (problema 5), che ora si compila con gcc. Resta aperta la causa del difetto.
   L'SPL R5 compilato con clang funziona sulla scheda.
-- **Kernel vanilla con clang**: compila, ma non è ancora provato sulla scheda. Non usa
-  `uEnv.txt` (si avvia `Image` non compresso).
-- **Moduli del kernel**: la Debian ha i moduli del kernel BeagleBoard 6.18. Il kernel
-  vanilla ha bisogno dei propri in `/lib/modules/7.4.0-rc1-gf66469d9905b`. Senza, il boot di base
-  funziona comunque, perché SD, ext4 e UART sono built-in nel `defconfig`.
+- **Kernel vanilla con clang**: funziona sulla scheda, con TI SCI built-in (problema 7).
+  Non usa `uEnv.txt` (si avvia `Image` non compresso). Il `defconfig` non copre tutto
+  quello che si aspetta la Debian IoT (zram, iwd, docker): sono funzioni accessorie, non
+  servono per il boot.
+- **Moduli del kernel**: il kernel vanilla usa i propri in
+  `/lib/modules/7.4.0-rc1-gf66469d9905b`, installati con `./build.sh modules-install`.
+  Vanno reinstallati a ogni cambio di configurazione. Quelli del kernel BeagleBoard 6.18
+  restano sulla SD per la voce Debian.
 - **Ripristino**: se il nuovo U-Boot non parte, basta accendere senza USR per tornare
   all'eMMC. Poi, dal PC, si rimettono sulla SD i file di boot salvati in
   `backup/sd-boot-2026.07/` e si cancella `uEnv.txt` (guida §4.8).

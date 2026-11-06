@@ -20,6 +20,7 @@ a U-Boot + Linux build, C utilities, and a small bare-metal shell/calculator.
 - [x] Build U-Boot A53 (`tispl.bin`, `u-boot.img`)
 - [x] Boot custom U-Boot from SD
 - [x] Build Linux kernel (`Image` + `k3-am625-beagleplay.dtb`)
+- [x] Boot mainline Linux from SD with vanilla U-Boot (Debian rootfs, `uname -r` = `7.4.0-rc1-gf66469d9905b`)
 - [ ] Build root filesystem (Buildroot)
 - [ ] Full custom boot to Linux shell
 

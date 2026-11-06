@@ -8,7 +8,7 @@ come riserva, con Debian e U-Boot 2021.01 di fabbrica.
 
 0. Scrivo la Debian ufficiale su microSD e verifico che parta **dalla SD** — *fatto*
 1. Sostituisco **solo U-Boot** sulla SD → verifico che Debian parta ancora — *fatto il 2026-11-06*
-2. Sostituisco **solo il kernel** (Linux mainline) → rootfs Debian invariato — *da fare*
+2. Sostituisco **solo il kernel** (Linux mainline) → rootfs Debian invariato — *fatto il 2026-11-06*
 
 Lo stato dettagliato e i problemi risolti sono in [2-rapporto-build-vanilla.md](2-rapporto-build-vanilla.md).
 
@@ -76,7 +76,7 @@ cd ~/Scrivania/TESI/Bare-Metal-ARM-Dev
 ./build.sh uboot-r5    # -> u-boot/build-r5/tiboot3-am62x-gp-evm.bin
 ./build.sh uboot-a53   # -> u-boot/build-a53/tispl.bin, u-boot.img (con gcc, vedi sotto)
 ./build.sh collect     # copia i 3 file di boot in out/boot/ e genera uEnv.txt
-./build.sh linux       # kernel mainline, defconfig arm64 (ci mette un po')
+./build.sh linux       # kernel mainline, defconfig arm64 + TI SCI built-in (ci mette un po')
 ./build.sh collect     # aggiunge Image-vanilla e il dtb
 ```
 
@@ -299,10 +299,11 @@ Si aggiunge una voce nuova a `extlinux.conf`, lasciando quella Debian come riser
 # SD nel PC, BOOTPART come al passo 4.2; ROOTPART = la partizione ext4 da 27.5G
 ROOTPART=/dev/sdb3          # <-- SOSTITUIRE (lettore integrato: /dev/mmcblk0p3)
 sudo mkdir -p /mnt/boot /mnt/rootfs
-sudo mount $BOOTPART /mnt/boot
+sudo mount -o uid=$(id -u),gid=$(id -g) $BOOTPART /mnt/boot   # FAT scrivibile dall'utente
 sudo mount $ROOTPART /mnt/rootfs
-sudo cp out/boot/Image-vanilla out/boot/k3-am625-beagleplay-vanilla.dtb /mnt/boot/
+cp out/boot/Image-vanilla out/boot/k3-am625-beagleplay-vanilla.dtb /mnt/boot/
 sudo ./build.sh modules-install /mnt/rootfs   # stessa toolchain della build (LLVM=1)
+sha256sum out/boot/Image-vanilla /mnt/boot/Image-vanilla   # le due somme devono coincidere
 cat /mnt/boot/extlinux/extlinux.conf   # vedere il formato della voce esistente
 ```
 
@@ -318,16 +319,46 @@ label vanilla
 - `p3`: con la Debian 13.7 IoT il rootfs è la partizione 3 (dal log di boot: `root=/dev/mmcblk1p3`,
   swap in `p2`). Se si usa un'altra immagine, verificarlo. In alternativa `root=PARTUUID=...`
   letto con `sudo blkid $ROOTPART`, che non dipende dalla numerazione.
-- Niente `initrd`: con `defconfig` i driver SD (`sdhci-am654`) ed ext4 sono built-in.
+- Niente `initrd`: i driver SD (`sdhci-am654`) ed ext4 sono già built-in nel `defconfig`,
+  e `build.sh linux` rende built-in anche TI SCI (clock e power domain dei periferici K3).
+  Nel `defconfig` puro TI SCI è un modulo e il kernel resta su `Waiting for root device`
+  (vedi "Problemi probabili").
 - Se il file usa percorsi relativi a una sottocartella (es. `/boot/...`), adeguare `kernel`/`fdt`.
 
 ```bash
 sync && sudo umount /mnt/boot /mnt/rootfs
 ```
 
-Successo: `uname -a` e `cat /proc/version` sulla scheda mostrano la versione
-mainline e `clang version 23...`. Salvare questi output (e il banner U-Boot)
-negli appunti come prova per la tesi.
+Dopo ogni nuova build del kernel vanno ricopiati `Image-vanilla` **e** i moduli
+(`modules-install`).
+
+Avvio: come al passo 4.7 (USR premuto). Sequenza attesa, verificata sulla scheda il
+2026-11-06 (log abbreviato):
+
+```
+U-Boot 2026.10-00667-g0a55b098d6f5 (Nov 06 2026 - 14:57:02 +0100)
+** Booting bootflow 'mmc@fa00000.bootdev.part_1' with extlinux
+Enter choice: 6:	vanilla                                         <- scelta da sola (default)
+Retrieving file: /Image-vanilla
+Retrieving file: /k3-am625-beagleplay-vanilla.dtb
+Starting kernel ...
+[    0.000000] Linux version 7.4.0-rc1-gf66469d9905b (nik@workstation) (clang version 23.1.4, LLD 23.1.4) ...
+[    1.805741] Waiting for root device /dev/mmcblk1p3...         <- per pochi ms, normale
+[    2.050557] mmcblk1: mmc1:aaaa SC32G 29.7 GiB
+[    2.103185] EXT4-fs (mmcblk1p3): mounted filesystem ... r/w
+Welcome to Debian GNU/Linux 13 (trixie)!
+[ TIME ] Timed out waiting for device dev-zram0.device - /dev/zram0.   <- circa 90 s, innocuo
+beagleplay login:
+```
+
+Successo: dopo il login `uname -r` restituisce `7.4.0-rc1-gf66469d9905b`.
+La riga `Linux version` del log mostra `clang version 23.1.4, LLD 23.1.4`.
+Salvare il log seriale negli appunti come prova per la tesi.
+
+- **Attesa di circa 90 s su zram**: la Debian IoT cerca `/dev/zram0`, ma nel `defconfig`
+  `CONFIG_ZRAM` non è impostato. Il boot prosegue comunque.
+- **`Failed to start iwd.service` / `docker.service`**: servizi della Debian che chiedono
+  funzioni assenti nel `defconfig`. Non riguardano il boot.
 
 ## Problemi probabili
 
@@ -367,6 +398,14 @@ negli appunti come prova per la tesi.
   sia sul branch `ti-linux-firmware`.
 - **Parte ancora U-Boot 2021.01**: USR non premuto all'accensione (boot da eMMC).
 - **Kernel parte ma `VFS: unable to mount root`**: `root=` sbagliato.
+- **Kernel fermo su `Waiting for root device /dev/mmcblk1p3...`**, seguito dopo circa 10 s
+  da molti `deferred probe pending: ... wait for supplier .../system-controller@44043000/...`
+  (provato il 2026-11-06). Il kernel è stato compilato con il `defconfig` puro, in cui
+  `TI_SCI_PROTOCOL`, `TI_SCI_CLK`, `TI_SCI_PM_DOMAINS` ecc. sono moduli. Senza initrd non
+  possono essere caricati, perché stanno sul rootfs che non si monta. Rifare
+  `./build.sh linux` (che li rende `=y`), poi `./build.sh collect`, e ricopiare
+  `Image-vanilla` e i moduli. Verifica sul PC: `grep TI_SCI_PROTOCOL linux/.config`
+  deve dare `=y`.
 - **Nessun output dopo `Starting kernel ...`**: verificare `console=ttyS2,115200n8 earlycon`.
 - **Moduli non caricati** (`modprobe` fallisce): `modules-install` non eseguito
   o rootfs sbagliato montato.
@@ -393,8 +432,12 @@ Dai sorgenti, non dalla documentazione:
   da `CROSS_COMPILE64`). I builtins vengono da `CFG_LIBUTILS_WITH_COMPILER_RT=y`.
 - `console=ttyS2,115200n8`: nel DT `stdout-path = "serial2:115200n8"`, e il log Debian mostra `ttyS2`.
 - SD = `mmc1` (`sdhci1`, commento `/* SD/MMC */`): `k3-am625-beagleplay.dts`.
-- `sdhci-am654`, ext4, 8250_omap built-in (`=y`): `arch/arm64/configs/defconfig` mainline,
-  quindi niente initrd. In U-Boot `initrd` è opzionale (`boot/pxe_utils.c`).
+- `sdhci-am654`, ext4, 8250_omap built-in (`=y`): `arch/arm64/configs/defconfig` mainline.
+  Lo stesso file mette invece TI SCI a `=m` (`TI_SCI_PROTOCOL`, `TI_SCI_CLK`,
+  `TI_SCI_PM_DOMAINS`, `TI_SCI_INTR_IRQCHIP`, `TI_SCI_INTA_IRQCHIP`, `RESET_TI_SCI`).
+  Per fare a meno dell'initrd `build.sh` li porta a `=y`. Verificato sulla scheda il 2026-11-06: con `=m` il kernel non trova il
+rootfs, con `=y` arriva al login.
+  In U-Boot `initrd` è opzionale (`boot/pxe_utils.c`).
 
 Scelte mie, che si discostano dalla documentazione:
 - Toolchain LLVM/clang al posto di gcc (richiesta dell'utente). La doc BeaglePlay usa gcc.

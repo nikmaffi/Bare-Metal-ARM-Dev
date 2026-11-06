@@ -65,4 +65,4 @@ out/
 # other
 restore_cfg/
 backup/
-output.log
+*.log

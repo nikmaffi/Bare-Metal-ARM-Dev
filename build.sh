@@ -98,6 +98,12 @@ linux_make() {
 
 linux() {
 	linux_make defconfig
+	# Senza initrd: TI SCI (clock, power domain, IRQ dei periferici K3) deve essere
+	# built-in, altrimenti il controller SD resta in deferred probe e il rootfs non si monta.
+	./scripts/config --enable TI_SCI_PROTOCOL --enable TI_SCI_CLK \
+		--enable TI_SCI_PM_DOMAINS --enable TI_SCI_INTR_IRQCHIP \
+		--enable TI_SCI_INTA_IRQCHIP --enable RESET_TI_SCI
+	linux_make olddefconfig
 	linux_make -j"$JOBS" Image dtbs modules
 }
 
