@@ -10,16 +10,16 @@ a U-Boot + Linux build, C utilities, and a small bare-metal shell/calculator.
 
 ### 1. UART bring-up
 - [x] Wire the FTDI 3.3 V cable (GND / RX / TX, no VCC)
-- [ ] Open serial console at 115200 8N1
-- [ ] Boot the official Debian image from SD and see output on UART
+- [x] Open serial console at 115200 8N1
+- [x] Boot the official Debian image from SD and see output on UART
 
 ### 2. U-Boot + Linux
-- [ ] Build toolchains (`arm-none-eabi-`, `aarch64-linux-gnu-`)
-- [ ] Build TF-A and fetch ti-linux-firmware
-- [ ] Build U-Boot R5 (`tiboot3.bin`)
-- [ ] Build U-Boot A53 (`tispl.bin`, `u-boot.img`)
-- [ ] Boot custom U-Boot from SD
-- [ ] Build Linux kernel (`Image` + `k3-am625-beagleplay.dtb`)
+- [x] Build toolchains (`arm-none-eabi-`, `aarch64-linux-gnu-`)
+- [x] Build TF-A and fetch ti-linux-firmware
+- [x] Build U-Boot R5 (`tiboot3.bin`)
+- [x] Build U-Boot A53 (`tispl.bin`, `u-boot.img`)
+- [x] Boot custom U-Boot from SD
+- [x] Build Linux kernel (`Image` + `k3-am625-beagleplay.dtb`)
 - [ ] Build root filesystem (Buildroot)
 - [ ] Full custom boot to Linux shell
 

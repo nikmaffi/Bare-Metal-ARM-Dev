@@ -1,5 +1,3 @@
-## Fase 1) collegamento UART e test output su schermo
-
 fonte:
 https://docs.beagleboard.org/boards/beagleplay/demos-and-tutorials/using-serial-console.html#beagleplay-serial-console
 
@@ -282,7 +280,3 @@ term_exitfunc: reset failed for dev UNKNOWN: Input/output error
 ```
 
 <hr><br><br>
-
-# Fase 2) Compilazione U-Boot e Linux
-
-fonte: 

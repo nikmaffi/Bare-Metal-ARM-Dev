@@ -53,3 +53,16 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# external components
+u-boot/
+trusted-firmware-a/
+optee_os/
+ti-linux-firmware/
+linux/
+out/
+
+# other
+restore_cfg/
+backup/
+output.log
